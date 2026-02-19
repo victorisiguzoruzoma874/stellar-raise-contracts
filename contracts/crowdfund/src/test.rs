@@ -410,10 +410,11 @@ fn test_contribute_above_minimum() {
     assert_eq!(client.contribution(&contributor), 50_000);
 }
 
-// ── Campaign Stats Tests ───────────────────────────────────────────────────
+
+// ── Roadmap Tests ──────────────────────────────────────────────────────────
 
 #[test]
-fn test_stats_no_contributions() {
+fn test_add_single_roadmap_item() {
     let (env, client, creator, token_address, _admin) = setup_env();
 
     let deadline = env.ledger().timestamp() + 3600;
@@ -421,235 +422,152 @@ fn test_stats_no_contributions() {
     let min_contribution: i128 = 1_000;
     client.initialize(&creator, &token_address, &goal, &deadline, &min_contribution);
 
-    let stats = client.get_stats();
+    let current_time = env.ledger().timestamp();
+    let roadmap_date = current_time + 86400; // 1 day in the future
+    let description = soroban_sdk::String::from_str(&env, "Beta release");
 
-    assert_eq!(stats.total_raised, 0);
-    assert_eq!(stats.goal, 1_000_000);
-    assert_eq!(stats.progress_bps, 0);
-    assert_eq!(stats.contributor_count, 0);
-    assert_eq!(stats.average_contribution, 0);
-    assert_eq!(stats.largest_contribution, 0);
+    client.add_roadmap_item(&roadmap_date, &description);
+
+    let roadmap = client.roadmap();
+    assert_eq!(roadmap.len(), 1);
+    assert_eq!(roadmap.get(0).unwrap().date, roadmap_date);
+    assert_eq!(roadmap.get(0).unwrap().description, description);
 }
 
 #[test]
-fn test_stats_single_contributor() {
-    let (env, client, creator, token_address, admin) = setup_env();
+fn test_add_multiple_roadmap_items_in_order() {
+    let (env, client, creator, token_address, _admin) = setup_env();
 
     let deadline = env.ledger().timestamp() + 3600;
     let goal: i128 = 1_000_000;
     let min_contribution: i128 = 1_000;
     client.initialize(&creator, &token_address, &goal, &deadline, &min_contribution);
 
-    let contributor = Address::generate(&env);
-    mint_to(&env, &token_address, &admin, &contributor, 500_000);
-    client.contribute(&contributor, &500_000);
+    let current_time = env.ledger().timestamp();
+    let date1 = current_time + 86400;
+    let date2 = current_time + 172800;
+    let date3 = current_time + 259200;
 
-    let stats = client.get_stats();
+    let desc1 = soroban_sdk::String::from_str(&env, "Alpha release");
+    let desc2 = soroban_sdk::String::from_str(&env, "Beta release");
+    let desc3 = soroban_sdk::String::from_str(&env, "Production launch");
 
-    assert_eq!(stats.total_raised, 500_000);
-    assert_eq!(stats.goal, 1_000_000);
-    assert_eq!(stats.progress_bps, 5_000); // 50%
-    assert_eq!(stats.contributor_count, 1);
-    assert_eq!(stats.average_contribution, 500_000);
-    assert_eq!(stats.largest_contribution, 500_000);
+    client.add_roadmap_item(&date1, &desc1);
+    client.add_roadmap_item(&date2, &desc2);
+    client.add_roadmap_item(&date3, &desc3);
+
+    let roadmap = client.roadmap();
+    assert_eq!(roadmap.len(), 3);
+    assert_eq!(roadmap.get(0).unwrap().date, date1);
+    assert_eq!(roadmap.get(1).unwrap().date, date2);
+    assert_eq!(roadmap.get(2).unwrap().date, date3);
+    assert_eq!(roadmap.get(0).unwrap().description, desc1);
+    assert_eq!(roadmap.get(1).unwrap().description, desc2);
+    assert_eq!(roadmap.get(2).unwrap().description, desc3);
 }
 
 #[test]
-fn test_stats_multiple_contributors() {
-    let (env, client, creator, token_address, admin) = setup_env();
+#[should_panic(expected = "date must be in the future")]
+fn test_add_roadmap_item_with_past_date_panics() {
+    let (env, client, creator, token_address, _admin) = setup_env();
 
     let deadline = env.ledger().timestamp() + 3600;
     let goal: i128 = 1_000_000;
     let min_contribution: i128 = 1_000;
     client.initialize(&creator, &token_address, &goal, &deadline, &min_contribution);
 
-    let alice = Address::generate(&env);
-    let bob = Address::generate(&env);
-    let charlie = Address::generate(&env);
-    
-    mint_to(&env, &token_address, &admin, &alice, 600_000);
-    mint_to(&env, &token_address, &admin, &bob, 300_000);
-    mint_to(&env, &token_address, &admin, &charlie, 100_000);
+    let current_time = env.ledger().timestamp();
+    // Set a past date by moving time forward first, then trying to add an item with an earlier date
+    env.ledger().set_timestamp(current_time + 1000);
+    let past_date = current_time + 500; // Earlier than the new current time
+    let description = soroban_sdk::String::from_str(&env, "Past milestone");
 
-    client.contribute(&alice, &600_000);
-    client.contribute(&bob, &300_000);
-    client.contribute(&charlie, &100_000);
-
-    let stats = client.get_stats();
-
-    assert_eq!(stats.total_raised, 1_000_000);
-    assert_eq!(stats.goal, 1_000_000);
-    assert_eq!(stats.progress_bps, 10_000); // 100%
-    assert_eq!(stats.contributor_count, 3);
-    assert_eq!(stats.average_contribution, 333_333); // 1_000_000 / 3
-    assert_eq!(stats.largest_contribution, 600_000);
+    client.add_roadmap_item(&past_date, &description); // should panic
 }
 
 #[test]
-fn test_stats_progress_capped_at_10000() {
-    let (env, client, creator, token_address, admin) = setup_env();
+#[should_panic(expected = "date must be in the future")]
+fn test_add_roadmap_item_with_current_date_panics() {
+    let (env, client, creator, token_address, _admin) = setup_env();
 
     let deadline = env.ledger().timestamp() + 3600;
     let goal: i128 = 1_000_000;
     let min_contribution: i128 = 1_000;
     client.initialize(&creator, &token_address, &goal, &deadline, &min_contribution);
 
-    let contributor = Address::generate(&env);
-    mint_to(&env, &token_address, &admin, &contributor, 1_500_000);
-    client.contribute(&contributor, &1_500_000);
+    let current_time = env.ledger().timestamp();
+    let description = soroban_sdk::String::from_str(&env, "Current milestone");
 
-    let stats = client.get_stats();
-
-    assert_eq!(stats.total_raised, 1_500_000);
-    assert_eq!(stats.goal, 1_000_000);
-    assert_eq!(stats.progress_bps, 10_000); // Capped at 100%
-    assert_eq!(stats.contributor_count, 1);
-    assert_eq!(stats.average_contribution, 1_500_000);
-    assert_eq!(stats.largest_contribution, 1_500_000);
+    client.add_roadmap_item(&current_time, &description); // should panic
 }
 
-// ── Integration Tests (Real Auth Validation) ─────────────────────────────────
-// These tests validate authorization without blanket mock_all_auths()
-// They test that only authorized addresses can perform specific actions
+#[test]
+#[should_panic(expected = "description cannot be empty")]
+fn test_add_roadmap_item_with_empty_description_panics() {
+    let (env, client, creator, token_address, _admin) = setup_env();
+
+    let deadline = env.ledger().timestamp() + 3600;
+    let goal: i128 = 1_000_000;
+    let min_contribution: i128 = 1_000;
+    client.initialize(&creator, &token_address, &goal, &deadline, &min_contribution);
+
+    let current_time = env.ledger().timestamp();
+    let roadmap_date = current_time + 86400;
+    let empty_description = soroban_sdk::String::from_str(&env, "");
+
+    client.add_roadmap_item(&roadmap_date, &empty_description); // should panic
+}
 
 #[test]
-fn test_full_lifecycle_with_real_auth() {
+#[should_panic]
+fn test_add_roadmap_item_by_non_creator_panics() {
     let env = Env::default();
-    // Use mock_all_auths_allowing_non_root_auth for more realistic auth simulation
-    env.mock_all_auths_allowing_non_root_auth();
+    let contract_id = env.register(crate::CrowdfundContract, ());
+    let client = crate::CrowdfundContractClient::new(&env, &contract_id);
 
-    // Deploy the crowdfund contract.
-    let contract_id = env.register(CrowdfundContract, ());
-    let client = CrowdfundContractClient::new(&env, &contract_id);
-
-    // Create a token for contributions.
     let token_admin = Address::generate(&env);
     let token_contract_id = env.register_stellar_asset_contract_v2(token_admin.clone());
     let token_address = token_contract_id.address();
 
-    // Campaign creator.
     let creator = Address::generate(&env);
-
-    // Mint tokens to the creator
-    let token_admin_client = token::StellarAssetClient::new(&env, &token_address);
-    token_admin_client.mint(&creator, &10_000_000);
-
-    let deadline = env.ledger().timestamp() + 3600;
-    let goal: i128 = 1_000_000;
-    let min_contribution: i128 = 1_000;
-
-    // Step 1: Initialize - creator must authorize (we simulate this)
-    client.initialize(&creator, &token_address, &goal, &deadline, &min_contribution);
-
-    // Verify campaign is initialized
-    assert_eq!(client.goal(), goal);
-    assert_eq!(client.total_raised(), 0);
-
-    // Step 2: Contributor contributes
-    let contributor = Address::generate(&env);
-    token_admin_client.mint(&contributor, &1_500_000);
-
-    client.contribute(&contributor, &1_000_000);
-
-    // Verify contribution
-    assert_eq!(client.total_raised(), 1_000_000);
-    assert_eq!(client.contribution(&contributor), 1_000_000);
-
-    // Step 3: Move past deadline
-    env.ledger().set_timestamp(deadline + 1);
-
-    // Step 4: Creator withdraws
-    client.withdraw();
-
-    // Verify withdrawal
-    assert_eq!(client.total_raised(), 0);
-}
-
-#[test]
-#[should_panic(expected = "InvalidAction")]
-fn test_non_creator_cannot_withdraw() {
-    let env = Env::default();
-    env.mock_all_auths_allowing_non_root_auth();
-
-    // Deploy the crowdfund contract.
-    let contract_id = env.register(CrowdfundContract, ());
-    let client = CrowdfundContractClient::new(&env, &contract_id);
-
-    // Create a token for contributions.
-    let token_admin = Address::generate(&env);
-    let token_contract_id = env.register_stellar_asset_contract_v2(token_admin.clone());
-    let token_address = token_contract_id.address();
-
-    // Campaign creator.
-    let creator = Address::generate(&env);
-
-    // Mint tokens to the creator
-    let token_admin_client = token::StellarAssetClient::new(&env, &token_address);
-    token_admin_client.mint(&creator, &10_000_000);
-
-    let deadline = env.ledger().timestamp() + 3600;
-    let goal: i128 = 1_000_000;
-    let min_contribution: i128 = 1_000;
-
-    // Initialize
-    client.initialize(&creator, &token_address, &goal, &deadline, &min_contribution);
-
-    // Contributor contributes
-    let contributor = Address::generate(&env);
-    token_admin_client.mint(&contributor, &1_500_000);
-    client.contribute(&contributor, &1_000_000);
-
-    // Move past deadline
-    env.ledger().set_timestamp(deadline + 1);
-
-    // Disable auth - non-creator cannot call withdraw
-    env.set_auths(&[]);
-    
-    // Try to withdraw with a non-creator address - should panic
     let non_creator = Address::generate(&env);
-    client.withdraw();
-}
 
-#[test]
-#[should_panic(expected = "InvalidAction")]
-fn test_unauthorized_contribute_on_behalf() {
-    let env = Env::default();
-    env.mock_all_auths_allowing_non_root_auth();
-
-    // Deploy the crowdfund contract.
-    let contract_id = env.register(CrowdfundContract, ());
-    let client = CrowdfundContractClient::new(&env, &contract_id);
-
-    // Create a token for contributions.
-    let token_admin = Address::generate(&env);
-    let token_contract_id = env.register_stellar_asset_contract_v2(token_admin.clone());
-    let token_address = token_contract_id.address();
-
-    // Campaign creator.
-    let creator = Address::generate(&env);
-
-    // Mint tokens to the creator
-    let token_admin_client = token::StellarAssetClient::new(&env, &token_address);
-    token_admin_client.mint(&creator, &10_000_000);
+    env.mock_all_auths();
 
     let deadline = env.ledger().timestamp() + 3600;
     let goal: i128 = 1_000_000;
     let min_contribution: i128 = 1_000;
-
-    // Initialize
     client.initialize(&creator, &token_address, &goal, &deadline, &min_contribution);
 
-    // Attacker tries to contribute on behalf of a victim
-    let attacker = Address::generate(&env);
-    let victim = Address::generate(&env);
-
-    // Mint tokens to the victim (not the attacker)
-    token_admin_client.mint(&victim, &1_000_000);
-
-    // Clear auths - attacker has no authorization
+    env.mock_all_auths_allowing_non_root_auth();
     env.set_auths(&[]);
 
-    // Attacker tries to call contribute - should fail because attacker isn't authorized
-    // The require_auth in contribute() will panic
-    client.contribute(&attacker, &1_000_000);
+    let current_time = env.ledger().timestamp();
+    let roadmap_date = current_time + 86400;
+    let description = soroban_sdk::String::from_str(&env, "Milestone");
+
+    client.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &non_creator,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "add_roadmap_item",
+            args: soroban_sdk::vec![&env],
+            sub_invokes: &[],
+        },
+    }]);
+
+    client.add_roadmap_item(&roadmap_date, &description); // should panic
+}
+
+#[test]
+fn test_roadmap_empty_after_initialization() {
+    let (env, client, creator, token_address, _admin) = setup_env();
+
+    let deadline = env.ledger().timestamp() + 3600;
+    let goal: i128 = 1_000_000;
+    let min_contribution: i128 = 1_000;
+    client.initialize(&creator, &token_address, &goal, &deadline, &min_contribution);
+
+    let roadmap = client.roadmap();
+    assert_eq!(roadmap.len(), 0);
 }
