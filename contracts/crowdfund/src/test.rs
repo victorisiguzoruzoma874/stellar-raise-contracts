@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use soroban_sdk::{testutils::Address as _, token, Address, Env};
+use soroban_sdk::{testutils::{Address as _, Ledger}, token, Address, Env};
 
 use crate::{CrowdfundContract, CrowdfundContractClient};
 
@@ -227,4 +227,42 @@ fn test_refund_when_goal_reached_panics() {
     env.ledger().set_timestamp(deadline + 1);
 
     client.refund(); // should panic — goal was met
+}
+
+#[test]
+#[should_panic(expected = "campaign is not active")]
+fn test_double_withdraw_panics() {
+    let (env, client, creator, token_address, admin) = setup_env();
+
+    let deadline = env.ledger().timestamp() + 3600;
+    let goal: i128 = 1_000_000;
+    client.initialize(&creator, &token_address, &goal, &deadline);
+
+    let contributor = Address::generate(&env);
+    mint_to(&env, &token_address, &admin, &contributor, 1_000_000);
+    client.contribute(&contributor, &1_000_000);
+
+    env.ledger().set_timestamp(deadline + 1);
+
+    client.withdraw();
+    client.withdraw(); // should panic — status is Successful
+}
+
+#[test]
+#[should_panic(expected = "campaign is not active")]
+fn test_double_refund_panics() {
+    let (env, client, creator, token_address, admin) = setup_env();
+
+    let deadline = env.ledger().timestamp() + 3600;
+    let goal: i128 = 1_000_000;
+    client.initialize(&creator, &token_address, &goal, &deadline);
+
+    let alice = Address::generate(&env);
+    mint_to(&env, &token_address, &admin, &alice, 500_000);
+    client.contribute(&alice, &500_000);
+
+    env.ledger().set_timestamp(deadline + 1);
+
+    client.refund();
+    client.refund(); // should panic — status is Refunded
 }

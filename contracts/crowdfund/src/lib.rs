@@ -7,6 +7,14 @@ mod test;
 
 // ── Data Keys ───────────────────────────────────────────────────────────────
 
+#[derive(Clone, PartialEq)]
+#[contracttype]
+pub enum Status {
+    Active,
+    Successful,
+    Refunded,
+}
+
 #[derive(Clone)]
 #[contracttype]
 pub enum DataKey {
@@ -24,6 +32,8 @@ pub enum DataKey {
     Contribution(Address),
     /// List of all contributor addresses.
     Contributors,
+    /// Campaign status (Active, Successful, Refunded).
+    Status,
 }
 
 // ── Contract ────────────────────────────────────────────────────────────────
@@ -59,6 +69,7 @@ impl CrowdfundContract {
         env.storage().instance().set(&DataKey::Goal, &goal);
         env.storage().instance().set(&DataKey::Deadline, &deadline);
         env.storage().instance().set(&DataKey::TotalRaised, &0i128);
+        env.storage().instance().set(&DataKey::Status, &Status::Active);
 
         let empty_contributors: Vec<Address> = Vec::new(&env);
         env.storage()
@@ -125,6 +136,11 @@ impl CrowdfundContract {
     /// Withdraw raised funds — only callable by the creator after the
     /// deadline, and only if the goal has been met.
     pub fn withdraw(env: Env) {
+        let status: Status = env.storage().instance().get(&DataKey::Status).unwrap();
+        if status != Status::Active {
+            panic!("campaign is not active");
+        }
+
         let creator: Address = env.storage().instance().get(&DataKey::Creator).unwrap();
         creator.require_auth();
 
@@ -145,11 +161,17 @@ impl CrowdfundContract {
         token_client.transfer(&env.current_contract_address(), &creator, &total);
 
         env.storage().instance().set(&DataKey::TotalRaised, &0i128);
+        env.storage().instance().set(&DataKey::Status, &Status::Successful);
     }
 
     /// Refund all contributors — callable by anyone after the deadline
     /// if the goal was **not** met.
     pub fn refund(env: Env) {
+        let status: Status = env.storage().instance().get(&DataKey::Status).unwrap();
+        if status != Status::Active {
+            panic!("campaign is not active");
+        }
+
         let deadline: u64 = env.storage().instance().get(&DataKey::Deadline).unwrap();
         if env.ledger().timestamp() <= deadline {
             panic!("campaign is still active");
@@ -189,6 +211,7 @@ impl CrowdfundContract {
         }
 
         env.storage().instance().set(&DataKey::TotalRaised, &0i128);
+        env.storage().instance().set(&DataKey::Status, &Status::Refunded);
     }
 
     // ── View helpers ────────────────────────────────────────────────────
