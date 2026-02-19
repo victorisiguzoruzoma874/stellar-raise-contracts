@@ -43,6 +43,32 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run Clippy
+
+      - name: Report WASM binary size
+        run: ls -lh target/wasm32-unknown-unknown/release/crowdfund.wasm
+
+      - name: Install wasm-opt (Binaryen)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binaryen
+
+      - name: Optimize WASM with wasm-opt
+        run: |
+          wasm-opt -Oz target/wasm32-unknown-unknown/release/crowdfund.wasm -o target/wasm32-unknown-unknown/release/crowdfund.opt.wasm
+
+      - name: Report optimized WASM binary size
+        run: ls -lh target/wasm32-unknown-unknown/release/crowdfund.opt.wasm
+
+      - name: Fail if WASM exceeds 256 KB
+        run: |
+          SIZE=$(stat -c%s target/wasm32-unknown-unknown/release/crowdfund.opt.wasm)
+          MAX=$((256 * 1024))
+          if [ "$SIZE" -gt "$MAX" ]; then
+            echo "WASM binary too large: $SIZE bytes (max $MAX bytes)"
+            exit 1
+          else
+            echo "WASM size OK: $SIZE bytes"
+          fi
         run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Run tests
