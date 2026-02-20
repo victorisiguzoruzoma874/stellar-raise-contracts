@@ -93,11 +93,16 @@ impl CrowdfundContract {
     /// Initializes a new crowdfunding campaign.
     ///
     /// # Arguments
-    /// * `creator`          – The campaign creator's address.
-    /// * `token`            – The token contract address used for contributions.
-    /// * `goal`             – The funding goal (in the token's smallest unit).
-    /// * `deadline`         – The campaign deadline as a ledger timestamp.
-    /// * `min_contribution` – The minimum contribution amount.
+    /// * `creator`            – The campaign creator's address.
+    /// * `token`              – The token contract address used for contributions.
+    /// * `goal`               – The funding goal (in the token's smallest unit).
+    /// * `deadline`           – The campaign deadline as a ledger timestamp.
+    /// * `min_contribution`   – The minimum contribution amount.
+    /// * `platform_config`    – Optional platform configuration (address and fee in basis points).
+    ///
+    /// # Panics
+    /// * If already initialized.
+    /// * If platform fee exceeds 10,000 (100%).
     pub fn initialize(
         env: Env,
         creator: Address,
@@ -105,6 +110,7 @@ impl CrowdfundContract {
         goal: i128,
         deadline: u64,
         min_contribution: i128,
+        platform_config: Option<PlatformConfig>,
     ) {
         // Prevent re-initialization.
         if env.storage().instance().has(&DataKey::Creator) {
@@ -112,6 +118,13 @@ impl CrowdfundContract {
         }
 
         creator.require_auth();
+
+        // Validate platform fee if provided.
+        if let Some(ref config) = platform_config {
+            if config.fee_bps > 10_000 {
+                panic!("platform fee cannot exceed 100%");
+            }
+        }
 
         env.storage().instance().set(&DataKey::Creator, &creator);
         env.storage().instance().set(&DataKey::Token, &token);
@@ -201,6 +214,9 @@ impl CrowdfundContract {
 
     /// Withdraw raised funds — only callable by the creator after the
     /// deadline, and only if the goal has been met.
+    ///
+    /// If a platform fee is configured, deducts the fee and transfers it to
+    /// the platform address, then sends the remainder to the creator.
     pub fn withdraw(env: Env) {
         let status: Status = env.storage().instance().get(&DataKey::Status).unwrap();
         if status != Status::Active {
@@ -224,7 +240,33 @@ impl CrowdfundContract {
         let token_address: Address = env.storage().instance().get(&DataKey::Token).unwrap();
         let token_client = token::Client::new(&env, &token_address);
 
-        token_client.transfer(&env.current_contract_address(), &creator, &total);
+        // Calculate and transfer platform fee if configured.
+        let platform_config: Option<PlatformConfig> =
+            env.storage().instance().get(&DataKey::PlatformConfig);
+
+        let creator_payout = if let Some(config) = platform_config {
+            // Calculate fee using checked arithmetic to prevent overflow.
+            let fee = total
+                .checked_mul(config.fee_bps as i128)
+                .expect("fee calculation overflow")
+                .checked_div(10_000)
+                .expect("fee division by zero");
+
+            // Transfer fee to platform.
+            token_client.transfer(&env.current_contract_address(), &config.address, &fee);
+
+            // Emit event with fee details.
+            env.events()
+                .publish(("campaign", "fee_transferred"), (&config.address, fee));
+
+            // Calculate creator payout.
+            total.checked_sub(fee).expect("creator payout underflow")
+        } else {
+            total
+        };
+
+        // Transfer remainder to creator.
+        token_client.transfer(&env.current_contract_address(), &creator, &creator_payout);
 
         env.storage().instance().set(&DataKey::TotalRaised, &0i128);
         env.storage().instance().set(&DataKey::Status, &Status::Successful);
@@ -381,14 +423,10 @@ impl CrowdfundContract {
         };
 
         roadmap.push_back(item.clone());
-        env.storage()
-            .instance()
-            .set(&DataKey::Roadmap, &roadmap);
+        env.storage().instance().set(&DataKey::Roadmap, &roadmap);
 
-        env.events().publish(
-            ("campaign", "roadmap_item_added"),
-            (date, description),
-        );
+        env.events()
+            .publish(("campaign", "roadmap_item_added"), (date, description));
     }
 
     /// Returns the full ordered list of roadmap items.

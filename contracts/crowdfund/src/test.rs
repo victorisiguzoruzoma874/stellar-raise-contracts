@@ -1,4 +1,7 @@
-#![cfg(test)]
+use soroban_sdk::{
+    testutils::{Address as _, Ledger},
+    token, Address, Env,
+};
 
 use soroban_sdk::{testutils::{Address as _, Ledger}, token, Address, Env, Vec};
 
@@ -831,7 +834,6 @@ fn test_contribute_above_minimum() {
     assert_eq!(client.contribution(&contributor), 50_000);
 }
 
-
 // ── Roadmap Tests ──────────────────────────────────────────────────────────
 
 #[test]
@@ -907,7 +909,14 @@ fn test_add_roadmap_item_with_past_date_panics() {
     let deadline = env.ledger().timestamp() + 3600;
     let goal: i128 = 1_000_000;
     let min_contribution: i128 = 1_000;
-    client.initialize(&creator, &token_address, &goal, &deadline, &min_contribution);
+    client.initialize(
+        &creator,
+        &token_address,
+        &goal,
+        &deadline,
+        &min_contribution,
+        &None,
+    );
 
     let current_time = env.ledger().timestamp();
     // Set a past date by moving time forward first, then trying to add an item with an earlier date
@@ -948,7 +957,14 @@ fn test_add_roadmap_item_with_empty_description_panics() {
     let deadline = env.ledger().timestamp() + 3600;
     let goal: i128 = 1_000_000;
     let min_contribution: i128 = 1_000;
-    client.initialize(&creator, &token_address, &goal, &deadline, &min_contribution);
+    client.initialize(
+        &creator,
+        &token_address,
+        &goal,
+        &deadline,
+        &min_contribution,
+        &None,
+    );
 
     let current_time = env.ledger().timestamp();
     let roadmap_date = current_time + 86400;
@@ -1011,7 +1027,14 @@ fn test_roadmap_empty_after_initialization() {
     let deadline = env.ledger().timestamp() + 3600;
     let goal: i128 = 1_000_000;
     let min_contribution: i128 = 1_000;
-    client.initialize(&creator, &token_address, &goal, &deadline, &min_contribution);
+    client.initialize(
+        &creator,
+        &token_address,
+        &goal,
+        &deadline,
+        &min_contribution,
+        &None,
+    );
 
     let roadmap = client.roadmap();
     assert_eq!(roadmap.len(), 0);
