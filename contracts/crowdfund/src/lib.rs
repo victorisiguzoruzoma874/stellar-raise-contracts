@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, String, Vec};
+use soroban_sdk::{contract, contractimpl, contracttype, contracterror, token, Address, Env, String, Vec};
 
 #[cfg(test)]
 mod test;
@@ -21,6 +21,17 @@ pub enum Status {
 pub struct RoadmapItem {
     pub date: u64,
     pub description: String,
+}
+
+#[derive(Clone)]
+#[contracttype]
+pub struct CampaignStats {
+    pub total_raised: i128,
+    pub goal: i128,
+    pub progress_bps: u32,
+    pub contributor_count: u32,
+    pub average_contribution: i128,
+    pub largest_contribution: i128,
 }
 
 #[derive(Clone)]
@@ -83,7 +94,7 @@ impl CrowdfundContract {
         goal: i128,
         deadline: u64,
         min_contribution: i128,
-    ) {
+    ) -> Result<(), ContractError> {
         // Prevent re-initialization.
         if env.storage().instance().has(&DataKey::Creator) {
             return Err(ContractError::AlreadyInitialized);
@@ -112,6 +123,8 @@ impl CrowdfundContract {
         env.storage()
             .instance()
             .set(&DataKey::Roadmap, &empty_roadmap);
+
+        Ok(())
     }
 
     /// Contribute tokens to the campaign.
@@ -182,7 +195,7 @@ impl CrowdfundContract {
 
     /// Withdraw raised funds — only callable by the creator after the
     /// deadline, and only if the goal has been met.
-    pub fn withdraw(env: Env) {
+    pub fn withdraw(env: Env) -> Result<(), ContractError> {
         let status: Status = env.storage().instance().get(&DataKey::Status).unwrap();
         if status != Status::Active {
             panic!("campaign is not active");
@@ -215,11 +228,39 @@ impl CrowdfundContract {
             ("campaign", "withdrawn"),
             (creator.clone(), total),
         );
+
+        Ok(())
     }
 
-    /// Refund all contributors — callable by anyone after the deadline
+    /// Refund a single contributor — callable by the contributor after the deadline
     /// if the goal was **not** met.
-    pub fn refund(env: Env) {
+    ///
+    /// # Pull-based Refund Model
+    ///
+    /// This contract uses a **pull-based refund** pattern for scalability.
+    /// Instead of iterating over all contributors in a single transaction
+    /// (which would fail with thousands of backers due to resource limits),
+    /// each contributor must claim their own refund individually.
+    ///
+    /// # Arguments
+    /// * `contributor` – The address claiming their refund.
+    ///
+    /// # Example
+    /// ```bash
+    /// stellar contract invoke \
+    ///   --id <CONTRACT_ID> \
+    ///   --network testnet \
+    ///   --source <YOUR_SECRET_KEY> \
+    ///   -- refund_single \
+    ///   --contributor <YOUR_ADDRESS>
+    /// ```
+    ///
+    /// # Errors
+    /// * `CampaignStillActive` – Deadline has not passed yet.
+    /// * `GoalReached` – Campaign was successful, use withdraw instead.
+    pub fn refund_single(env: Env, contributor: Address) -> Result<(), ContractError> {
+        contributor.require_auth();
+
         let status: Status = env.storage().instance().get(&DataKey::Status).unwrap();
         if status != Status::Active {
             panic!("campaign is not active");
@@ -236,37 +277,34 @@ impl CrowdfundContract {
             return Err(ContractError::GoalReached);
         }
 
+        let contribution_key = DataKey::Contribution(contributor.clone());
+        let amount: i128 = env
+            .storage()
+            .persistent()
+            .get(&contribution_key)
+            .unwrap_or(0);
+
+        if amount == 0 {
+            panic!("no contribution to refund");
+        }
+
         let token_address: Address = env.storage().instance().get(&DataKey::Token).unwrap();
         let token_client = token::Client::new(&env, &token_address);
 
-        let contributors: Vec<Address> = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Contributors)
-            .unwrap();
+        token_client.transfer(&env.current_contract_address(), &contributor, &amount);
 
-        for contributor in contributors.iter() {
-            let contribution_key = DataKey::Contribution(contributor.clone());
-            let amount: i128 = env
-                .storage()
-                .persistent()
-                .get(&contribution_key)
-                .unwrap_or(0);
-            if amount > 0 {
-                token_client.transfer(&env.current_contract_address(), &contributor, &amount);
-                env.storage()
-                    .persistent()
-                    .set(&contribution_key, &0i128);
-                env.storage()
-                    .persistent()
-                    .extend_ttl(&contribution_key, 100, 100);
-            }
-        }
+        env.storage().persistent().set(&contribution_key, &0i128);
+        env.storage().persistent().extend_ttl(&contribution_key, 100, 100);
 
-        env.storage().instance().set(&DataKey::TotalRaised, &0i128);
-        env.storage()
-            .instance()
-            .set(&DataKey::Status, &Status::Refunded);
+        let new_total = total - amount;
+        env.storage().instance().set(&DataKey::TotalRaised, &new_total);
+
+        env.events().publish(
+            ("campaign", "refund_single"),
+            (contributor.clone(), amount),
+        );
+
+        Ok(())
     }
 
     /// Cancel the campaign and refund all contributors — callable only by
@@ -399,7 +437,7 @@ impl CrowdfundContract {
     pub fn get_stats(env: Env) -> CampaignStats {
         let total_raised: i128 = env.storage().instance().get(&DataKey::TotalRaised).unwrap_or(0);
         let goal: i128 = env.storage().instance().get(&DataKey::Goal).unwrap();
-        let contributors: Vec<Address> = env.storage().instance().get(&DataKey::Contributors).unwrap();
+        let contributors: Vec<Address> = env.storage().persistent().get(&DataKey::Contributors).unwrap();
 
         let progress_bps = if goal > 0 {
             let raw = (total_raised as i128 * 10_000) / goal;
@@ -415,7 +453,7 @@ impl CrowdfundContract {
             let average = total_raised / contributor_count as i128;
             let mut largest = 0i128;
             for contributor in contributors.iter() {
-                let amount: i128 = env.storage().instance().get(&DataKey::Contribution(contributor)).unwrap_or(0);
+                let amount: i128 = env.storage().persistent().get(&DataKey::Contribution(contributor)).unwrap_or(0);
                 if amount > largest {
                     largest = amount;
                 }
