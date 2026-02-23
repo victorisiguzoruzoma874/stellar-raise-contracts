@@ -13,53 +13,9 @@ Stellar Raise lets anyone create a crowdfunding campaign on-chain. Contributors 
 | Feature        | Description                                        |
 | :------------- | :------------------------------------------------- |
 | **Initialize** | Create a campaign with a goal, deadline, and token |
-| **Contribute** | Pledge tokens before the deadline                  |
-| **Withdraw**   | Creator claims funds after a successful campaign   |
-| **Refund**     | Contributors reclaim tokens if the goal is missed  |
-
-## Architecture
-
-The following diagram shows the high-level relationship between the frontend, Soroban smart contracts, and the Stellar network:
-
-```mermaid
-graph TD
-    A[User Browser] -->|HTTP / HTTPS| B[Frontend<br/>Next.js / React]
-
-    B -->|Soroban SDK calls| C[Soroban RPC Node]
-    B -->|Horizon API calls| D[Horizon API Server]
-
-    C -->|Deploy / Invoke| E[Soroban Smart Contracts<br/>Crowdfund Contract<br/>Factory Contract]
-    D -->|Account / Transaction data| B
-
-    E -->|Read / Write state| F[Stellar Ledger]
-    C -->|Submit transactions| F
-
-    F -->|Ledger events| G[Off-chain Indexer<br/>Optional]
-    G -->|Indexed campaign data| B
-
-    subgraph network["Stellar Network"]
-        C
-        D
-        F
-    end
-
-    subgraph contracts["Smart Contracts Layer"]
-        E
-    end
-
-    subgraph services["Off-chain Services"]
-        G
-    end
-```
-
-### Layer Summary
-
-| Layer                 | Technology            | Responsibility                           |
-| :-------------------- | :-------------------- | :--------------------------------------- |
-| **Frontend**          | Next.js / React       | User interface and wallet interaction    |
-| **Smart Contracts**   | Soroban / Rust        | Campaign logic, fund management          |
-| **Stellar Network**   | Soroban RPC + Horizon | Transaction processing and ledger state  |
-| **Off-chain Indexer** | Optional              | Event indexing for faster data retrieval |
+| **Contribute** | Pledge tokens before the deadline |
+| **Withdraw** | Creator claims funds after a successful campaign |
+| **Refund** | Contributors individually reclaim tokens if the goal is missed (pull-based) |
 
 ## Project Structure
 
@@ -106,7 +62,7 @@ cargo test --workspace
 
 ```rust
 // Create a new campaign
-fn initialize(env, creator, token, goal, deadline);
+fn initialize(env, creator, token, goal, deadline, min_contribution);
 
 // Pledge tokens to the campaign
 fn contribute(env, contributor, amount);
@@ -114,14 +70,44 @@ fn contribute(env, contributor, amount);
 // Creator withdraws after successful campaign
 fn withdraw(env);
 
-// Refund all contributors if goal not met
-fn refund(env);
+// Individual contributor claims refund if goal not met (pull-based)
+fn refund_single(env, contributor);
 
 // View functions
 fn total_raised(env) -> i128;
 fn goal(env) -> i128;
 fn deadline(env) -> u64;
 fn contribution(env, contributor) -> i128;
+fn min_contribution(env) -> i128;
+```
+
+## Pull-based Refund Model
+
+This contract uses a **pull-based refund** pattern for scalability and gas efficiency.
+
+### Why Pull-based?
+
+A traditional "push" refund (where one transaction refunds all contributors) would:
+- Fail with thousands of contributors due to resource limits
+- Be expensive and unpredictable in cost
+- Create a single point of failure
+
+### How it Works
+
+If the campaign goal is **not met** by the deadline:
+1. Each contributor must claim their own refund by calling `refund_single`
+2. Contributors can claim at any time after the deadline
+3. The refund is processed immediately and securely
+
+### Example: Claiming Your Refund
+
+```bash
+stellar contract invoke \
+  --id <CONTRACT_ID> \
+  --network testnet \
+  --source <YOUR_SECRET_KEY> \
+  -- refund_single \
+  --contributor <YOUR_ADDRESS>
 ```
 
 ## Upgrading the Contract
