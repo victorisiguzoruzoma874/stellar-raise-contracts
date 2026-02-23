@@ -1105,4 +1105,11 @@ impl CrowdfundContract {
     pub fn token(env: Env) -> Address {
         env.storage().instance().get(&DataKey::Token).unwrap()
     }
+
+    /// Returns the remaining amount needed to reach the goal.
+    pub fn remaining_amount(env: Env) -> i128 {
+        let goal: i128 = env.storage().instance().get(&DataKey::Goal).unwrap();
+        let total_raised: i128 = env.storage().instance().get(&DataKey::TotalRaised).unwrap_or(0);
+        if goal > total_raised { goal - total_raised } else { 0 }
+    }
 }
